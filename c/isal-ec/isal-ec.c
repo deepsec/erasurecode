@@ -225,8 +225,8 @@ int main(int argc, char **argv)
                 err_quit("USAGE: %s [-d] [-k k] [-p p] <origin_file | encode_file_prefix>", argv[0]);
         }
 
+	strncpy(filename, argv[optind], sizeof(filename));
 	if (is_decode == 0) {
-		strncpy(filename, argv[optind], sizeof(filename));
 		if (lstat(filename, &st) < 0) {
 			ERR_SYS("lstat('%s') error", filename);
 		}
@@ -267,7 +267,6 @@ int main(int argc, char **argv)
 			}
 			close(tmpfd);
 		}
-
 		release_ec_buf(ebi);
 		close(fd);
 	}
@@ -276,7 +275,7 @@ int main(int argc, char **argv)
 		for (i = 0; i < m; i++) {
 			snprintf(tmpname, sizeof(tmpname), "%s.isal.%d", filename, i);
 			if (lstat(tmpname, &st) < 0) {
-				ERR_MSG("lstat('%s') error", tmpname);
+				err_msg("lstat('%s') error, skip it!", tmpname);
 				continue;
 			}
 			frag_len = st.st_size;
@@ -288,8 +287,8 @@ int main(int argc, char **argv)
 			if ((tmpfd = open(tmpname, O_RDONLY)) < 0) {
 				err_msg("open('%s') error", tmpname);
 				dbg("skip it");
-				ebi->frag_err_list[obi->nerrs++] = i;
-				continue
+				ebi->frag_err_list[ebi->nerrs++] = i;
+				continue;
 			}
 			if(readn(tmpfd, ebi->frag_ptrs[i], ebi->frag_len) != ebi->frag_len) {
 				ERR_SYS("writen() error");
@@ -297,10 +296,12 @@ int main(int argc, char **argv)
 			close(tmpfd);
 		}
 		if (ebi->nerrs > p) {
-			err_quit("corrupt frags[%d] > p[%d], quit", ebi->nerrs, p);
 			release_ec_buf(ebi);
+			err_quit("Too many(%d) fragments lost, must be less(or equal) than [%d], quit", ebi->nerrs, p);
 		}
+		dbg("total [%d] fragment lost, recontruct it", ebi->nerrs);
 		if (ebi->nerrs > 0) {
+			int	ret;
 			ret = gf_gen_decode_matrix_simple(ebi->encode_matrix, ebi->decode_matrix,
 					 ebi->invert_matrix, ebi->temp_matrix, ebi->decode_index,
                                           ebi->frag_err_list, ebi->nerrs, k, m);
@@ -309,15 +310,27 @@ int main(int argc, char **argv)
 			}
 			// Pack recovery array pointers as list of valid fragments
 			for (i = 0; i < k; i++) {
-				ebi->recover_srcs[i] = ebi->frag_ptrs[decode_index[i]];
+				ebi->recover_srcs[i] = ebi->frag_ptrs[ebi->decode_index[i]];
 			}
 			// Recover data
 			ec_init_tables(k, ebi->nerrs, ebi->decode_matrix, ebi->g_tbls);
 			ec_encode_data(ebi->frag_len, k, ebi->nerrs, ebi->g_tbls, ebi->recover_srcs, ebi->recover_outp);
 		}
-
-			
-
-
+		for (i = 0; i < ebi->nerrs; i++) {
+			ebi->frag_ptrs[ebi->frag_err_list[i]] = ebi->recover_outp[i];
+		}
+		snprintf(tmpname, sizeof(tmpname), "%s.isal", filename);
+		if ((tmpfd = open(tmpname, O_CREAT | O_RDWR, 0644)) < 0) {
+			ERR_SYS("open('%s') error", tmpname);
+		}
+		for (i = 0; i < ebi->k; i++) {
+			if(writen(tmpfd, ebi->frag_ptrs[i], ebi->frag_len) != ebi->frag_len) {
+				ERR_SYS("writen() error");
+			}
+		}
+		close(tmpfd);
+		release_ec_buf(ebi);
+		dbg("decoder ok");
+	}
 	return 0;
 }
