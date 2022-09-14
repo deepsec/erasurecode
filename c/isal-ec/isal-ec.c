@@ -34,6 +34,7 @@ typedef struct erasure_code_buf_info {
 	unsigned char	*recover_outp[M_K_P_MAX];
         unsigned char	frag_err_list[M_K_P_MAX];
 	int		nerrs;
+      	unsigned char	*recover_frag_ptrs[M_K_P_MAX];
 	
 	// Coefficient matrices
 	unsigned char	*encode_matrix;
@@ -46,7 +47,7 @@ typedef struct erasure_code_buf_info {
 
 EC_BUF_INFO* alloc_ec_buf(int m, int k, int p, int frag_len)
 {
-	int	i, j;
+	int	i;
 	EC_BUF_INFO	*ebi;
 
 	ebi = malloc(sizeof(EC_BUF_INFO));
@@ -79,7 +80,7 @@ EC_BUF_INFO* alloc_ec_buf(int m, int k, int p, int frag_len)
 		}
 	}
 	// alloc for recover_outp
-	for (j = 0; j < p; j++) {
+	for (i = 0; i < p; i++) {
 		ebi->recover_outp[i] = malloc(ebi->frag_len);
 		if (ebi->recover_outp[i] == NULL) {
 			ERR_SYS("malloc() error");
@@ -90,7 +91,7 @@ EC_BUF_INFO* alloc_ec_buf(int m, int k, int p, int frag_len)
 
 void release_ec_buf(EC_BUF_INFO *ebi)
 {
-	int	i, j;
+	int	i;
 
 	if (ebi == NULL) {
 		return;
@@ -100,18 +101,19 @@ void release_ec_buf(EC_BUF_INFO *ebi)
 	if (ebi->invert_matrix) free(ebi->invert_matrix);
 	if (ebi->temp_matrix) free(ebi->temp_matrix);
 	if (ebi->g_tbls) free(ebi->g_tbls);
+
 	for (i = 0; i < ebi->m; i++) {
 		if (ebi->frag_ptrs[i] != NULL) {
 			free(ebi->frag_ptrs[i]);
 		}
 	}
-	for (j = 0; j < ebi->p; j++) {
-		if (ebi->recover_outp[j] != NULL) {
-			free(ebi->recover_outp[j]);
+	for (i = 0; i < ebi->p; i++) {
+		if (ebi->recover_outp[i] != NULL) {
+			free(ebi->recover_outp[i]);
 		}
 	}
-
 	free(ebi);
+
 	dbg("release all buffer");
 }
 
@@ -282,6 +284,8 @@ int main(int argc, char **argv)
 			break;
 		}
 		ebi = alloc_ec_buf(m, k, p, frag_len);
+		dbg("m[%d], k[%d], p[%d], frag_len[%d]", m, k, p, frag_len);
+		dbg("m[%d], k[%d], p[%d], frag_len[%d]", ebi->m, ebi->k, ebi->p, ebi->frag_len);
 		for (i = 0; i < m; i++) {
 			snprintf(tmpname, sizeof(tmpname), "%s.isal.%d", filename, i);
 			if ((tmpfd = open(tmpname, O_RDONLY)) < 0) {
@@ -290,8 +294,9 @@ int main(int argc, char **argv)
 				ebi->frag_err_list[ebi->nerrs++] = i;
 				continue;
 			}
+			dbg("ebi->frag_ptrs[%d], len:[%d]", i, ebi->frag_len);
 			if(readn(tmpfd, ebi->frag_ptrs[i], ebi->frag_len) != ebi->frag_len) {
-				ERR_SYS("writen() error");
+				ERR_SYS("readn() error");
 			}
 			close(tmpfd);
 		}
@@ -299,26 +304,46 @@ int main(int argc, char **argv)
 			release_ec_buf(ebi);
 			err_quit("Too many(%d) fragments lost, must be less(or equal) than [%d], quit", ebi->nerrs, p);
 		}
-		dbg("total [%d] fragment lost, recontruct it", ebi->nerrs);
+		printf("####################################\n");
+		dbg("total [%d] fragment lost:", ebi->nerrs);
+		for (i = 0; i < ebi->nerrs; i++) {
+			printf(" %d ", ebi->frag_err_list[i]);
+		}	
+		printf("\n####################################\n");
 		if (ebi->nerrs > 0) {
 			int	ret;
+			gettimeofday(&start, NULL);
+			
+			gf_gen_cauchy1_matrix(ebi->encode_matrix, ebi->m, ebi->k);
 			ret = gf_gen_decode_matrix_simple(ebi->encode_matrix, ebi->decode_matrix,
 					 ebi->invert_matrix, ebi->temp_matrix, ebi->decode_index,
                                           ebi->frag_err_list, ebi->nerrs, k, m);
 			if (ret != 0) {
-				ERR_QUIT("Fail on generate decode matrix, quit");
+				ERR_QUIT("Fail on generate decode matrix, quit, ret[%d]", ret);
+			}
+			for (i = 0; i < k; i++) {
+				dbg("decode_index[%d]: %d", i, ebi->decode_index[i]);
 			}
 			// Pack recovery array pointers as list of valid fragments
 			for (i = 0; i < k; i++) {
 				ebi->recover_srcs[i] = ebi->frag_ptrs[ebi->decode_index[i]];
 			}
 			// Recover data
+			//ec_init_tables(k, p, &encode_matrix[k * k], g_tbls);
 			ec_init_tables(k, ebi->nerrs, ebi->decode_matrix, ebi->g_tbls);
-			ec_encode_data(ebi->frag_len, k, ebi->nerrs, ebi->g_tbls, ebi->recover_srcs, ebi->recover_outp);
+			//ec_encode_data(len, k, nerrs, g_tbls, recover_srcs, recover_outp);
+			ec_encode_data(ebi->frag_len, ebi->k, ebi->nerrs, ebi->g_tbls, ebi->recover_srcs, ebi->recover_outp);
+		}
+
+		// save frag buffer , don't memcpy()
+		for (i = 0; i < ebi->m; i++) {
+			ebi->recover_frag_ptrs[i] = ebi->frag_ptrs[i];
 		}
 		for (i = 0; i < ebi->nerrs; i++) {
-			ebi->frag_ptrs[ebi->frag_err_list[i]] = ebi->recover_outp[i];
+			ebi->recover_frag_ptrs[ebi->frag_err_list[i]] = ebi->recover_outp[i];
 		}
+
+		dbg("####### Recovery time: %ld #########", time_since(&start));
 		snprintf(tmpname, sizeof(tmpname), "%s.isal", filename);
 		if ((tmpfd = open(tmpname, O_CREAT | O_RDWR, 0644)) < 0) {
 			ERR_SYS("open('%s') error", tmpname);
