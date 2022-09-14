@@ -227,6 +227,8 @@ int main(int argc, char **argv)
                 err_quit("USAGE: %s [-d] [-k k] [-p p] <origin_file | encode_file_prefix>", argv[0]);
         }
 
+	file_size = 0;
+	frag_len = 0;
 	strncpy(filename, argv[optind], sizeof(filename));
 	if (is_decode == 0) {
 		if (lstat(filename, &st) < 0) {
@@ -241,7 +243,7 @@ int main(int argc, char **argv)
 			frag_len += 1;
 			dbg("**** padding frag for the last fragment");
 		}
-		dbg("file['%s'], file_size[%ld], m[%d], k[%d], p[%d], frag_len[%ld]", filename, file_size, m, k, p, frag_len);
+		msg("file['%s'], file_size[%ld], m[%d], k[%d], p[%d], frag_len[%ld]", filename, file_size, m, k, p, frag_len);
 
 		ebi = alloc_ec_buf(m, k, p, frag_len);
 		for (i = 0; i < k; i++) {
@@ -257,9 +259,9 @@ int main(int argc, char **argv)
 		// Generate EC parity blocks from sources
 		ec_encode_data(frag_len, k, p, ebi->g_tbls, ebi->frag_ptrs, &(ebi->frag_ptrs)[k]);
 
-		dbg("cost time: %lld (us)", time_since(&start));
+		msg("############ encode time: %lld (us) #############", time_since(&start));
 		for (i = 0; i < ebi->m; i++) {
-			snprintf(tmpname, sizeof(tmpname), "%s.isal.%d", filename, i);
+			snprintf(tmpname, sizeof(tmpname), "%s.%d", filename, i);
 			if ((tmpfd = open(tmpname, O_CREAT | O_RDWR, 0644)) < 0) {
 				ERR_SYS("open('%s') error", tmpname);
 			}
@@ -275,26 +277,24 @@ int main(int argc, char **argv)
 	else {
 		// get frag_len
 		for (i = 0; i < m; i++) {
-			snprintf(tmpname, sizeof(tmpname), "%s.isal.%d", filename, i);
+			snprintf(tmpname, sizeof(tmpname), "%s.%d", filename, i);
 			if (lstat(tmpname, &st) < 0) {
-				err_msg("lstat('%s') error, skip it!", tmpname);
+				DBG("lstat('%s') error, skip it!", tmpname);
 				continue;
 			}
 			frag_len = st.st_size;
 			break;
 		}
 		ebi = alloc_ec_buf(m, k, p, frag_len);
-		dbg("m[%d], k[%d], p[%d], frag_len[%d]", m, k, p, frag_len);
 		dbg("m[%d], k[%d], p[%d], frag_len[%d]", ebi->m, ebi->k, ebi->p, ebi->frag_len);
 		for (i = 0; i < m; i++) {
-			snprintf(tmpname, sizeof(tmpname), "%s.isal.%d", filename, i);
+			snprintf(tmpname, sizeof(tmpname), "%s.%d", filename, i);
 			if ((tmpfd = open(tmpname, O_RDONLY)) < 0) {
-				err_msg("open('%s') error", tmpname);
-				dbg("skip it");
+				DBG("open('%s') error, skip it....", tmpname);
 				ebi->frag_err_list[ebi->nerrs++] = i;
 				continue;
 			}
-			dbg("ebi->frag_ptrs[%d], len:[%d]", i, ebi->frag_len);
+			//dbg("ebi->frag_ptrs[%d], len:[%d]", i, ebi->frag_len);
 			if(readn(tmpfd, ebi->frag_ptrs[i], ebi->frag_len) != ebi->frag_len) {
 				ERR_SYS("readn() error");
 			}
@@ -304,12 +304,14 @@ int main(int argc, char **argv)
 			release_ec_buf(ebi);
 			err_quit("Too many(%d) fragments lost, must be less(or equal) than [%d], quit", ebi->nerrs, p);
 		}
-		printf("####################################\n");
-		dbg("total [%d] fragment lost:", ebi->nerrs);
-		for (i = 0; i < ebi->nerrs; i++) {
-			printf(" %d ", ebi->frag_err_list[i]);
-		}	
-		printf("\n####################################\n");
+
+		//printf("####################################\n");
+		//dbg("total [%d] fragment lost:", ebi->nerrs);
+		//for (i = 0; i < ebi->nerrs; i++) {
+		//	printf(" %d ", ebi->frag_err_list[i]);
+		//}	
+		//printf("\n####################################\n");
+
 		if (ebi->nerrs > 0) {
 			int	ret;
 			gettimeofday(&start, NULL);
@@ -321,9 +323,9 @@ int main(int argc, char **argv)
 			if (ret != 0) {
 				ERR_QUIT("Fail on generate decode matrix, quit, ret[%d]", ret);
 			}
-			for (i = 0; i < k; i++) {
-				dbg("decode_index[%d]: %d", i, ebi->decode_index[i]);
-			}
+			//for (i = 0; i < k; i++) {
+			//	dbg("decode_index[%d]: %d", i, ebi->decode_index[i]);
+			//}
 			// Pack recovery array pointers as list of valid fragments
 			for (i = 0; i < k; i++) {
 				ebi->recover_srcs[i] = ebi->frag_ptrs[ebi->decode_index[i]];
@@ -343,13 +345,13 @@ int main(int argc, char **argv)
 			ebi->recover_frag_ptrs[ebi->frag_err_list[i]] = ebi->recover_outp[i];
 		}
 
-		dbg("####### Recovery time: %ld #########", time_since(&start));
-		snprintf(tmpname, sizeof(tmpname), "%s.isal", filename);
+		msg("####### Recovery time: %ld (us) #########", time_since(&start));
+		snprintf(tmpname, sizeof(tmpname), "%s", filename);
 		if ((tmpfd = open(tmpname, O_CREAT | O_RDWR, 0644)) < 0) {
 			ERR_SYS("open('%s') error", tmpname);
 		}
 		for (i = 0; i < ebi->k; i++) {
-			if(writen(tmpfd, ebi->frag_ptrs[i], ebi->frag_len) != ebi->frag_len) {
+			if(writen(tmpfd, ebi->recover_frag_ptrs[i], ebi->frag_len) != ebi->frag_len) {
 				ERR_SYS("writen() error");
 			}
 		}

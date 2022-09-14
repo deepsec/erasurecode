@@ -15,12 +15,15 @@ void err_quit(const char *fmt, ...);
 #define ERR_MSG(fmt, args...)		err_msg("*ERR* %s[%d]: " fmt, __FILE__, __LINE__, ## args)
 #define ERR_QUIT(fmt, args...)		err_quit("*ERR* %s[%d]: " fmt, __FILE__, __LINE__, ## args)
 
-#define dbg(fmt, args...)		err_msg("*INFO* " fmt,  ## args)
+#define MSG(fmt, args...)		err_msg("%s[%d]: " fmt, __FILE__, __LINE__, ## args)
+#define msg(fmt, args...)		err_msg(" " fmt,  ## args)
 
 #ifdef __DEEPDBG__
 #define DBG(fmt, args...)		err_msg("*DBG* %s[%d] -> " fmt, __FILE__, __LINE__, ## args)
+#define dbg(fmt, args...)		err_msg("*INFO* " fmt,  ## args)
 #else
 #define DBG(fmt, args...)
+#define dbg(fmt, args...)
 #endif
 
 #endif

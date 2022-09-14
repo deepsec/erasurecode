@@ -47,8 +47,8 @@ import (
 	"github.com/klauspost/reedsolomon"
 )
 
-var dataShards = flag.Int("data", 4, "Number of shards to split the data into, must be below 257.")
-var parShards = flag.Int("par", 2, "Number of parity shards")
+var dataShards = flag.Int("data", 6, "Number of shards to split the data into, must be below 257.")
+var parShards = flag.Int("par", 3, "Number of parity shards")
 var outDir = flag.String("out", "", "Alternative output directory")
 
 func init() {
