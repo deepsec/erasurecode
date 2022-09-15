@@ -77,6 +77,7 @@ func main() {
 
 	// Create encoding matrix.
 	enc, err := reedsolomon.New(*dataShards, *parShards)
+	//enc, err := reedsolomon.New(*dataShards, *parShards, reedsolomon.WithMaxGoroutines(1))
 	checkErr(err)
 
 	fmt.Println("Opening", fname)

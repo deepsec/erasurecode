@@ -1,6 +1,6 @@
 CC := gcc
 CFLAGS := -Wall -g -D__DEEPDBG__ -D_FILE_OFFSET_BITS=64
-#CFLAGS := -Wall -O2 -D_FILE_OFFSET_BITS=64
+#CFLAGS := -Wall -g -O2 -D_FILE_OFFSET_BITS=64
 INCLUDE := -I. -I../common -I/usr/local/include 
 LIBS := -L/usr/local/lib -L/usr/lib -L. -L../common -lpthread -lisal
 

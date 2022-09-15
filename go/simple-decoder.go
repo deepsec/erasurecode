@@ -71,6 +71,7 @@ func main() {
 
 	// Create matrix
 	enc, err := reedsolomon.New(*dataShards, *parShards)
+	//enc, err := reedsolomon.New(*dataShards, *parShards, reedsolomon.WithMaxGoroutines(1))
 	checkErr(err)
 
 	// Create shards and load the data.
