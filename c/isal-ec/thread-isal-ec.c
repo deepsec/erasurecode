@@ -20,8 +20,8 @@
 #include "error.h"
 
 #define M_K_P_MAX	255
-#define K_DEFAULT	2
-#define P_DEFAULT	1
+#define K_DEFAULT	6
+#define P_DEFAULT	3
 
 typedef unsigned char u8;
 
