@@ -14,13 +14,14 @@
 #include <errno.h>
 #include <isa-l.h>
 #include <pthread.h>
+#include <sys/sysinfo.h>
 
 #include "common.h"
 #include "error.h"
 
 #define M_K_P_MAX	255
-#define K_DEFAULT	6
-#define P_DEFAULT	3
+#define K_DEFAULT	2
+#define P_DEFAULT	1
 
 typedef unsigned char u8;
 
@@ -193,35 +194,36 @@ typedef struct erasure_sharding_index_info {
         int     p;
         int     frag_len;
         int     fd;
+	int	wfd[M_K_P_MAX];
+	int	block_len;
 	int64_t	offset;
         int     index;
-	char	filename[NAME_MAX];
         int	time;
 } THREAD_BLOCK_INFO;
-#define PTHREAD_MAX_COUNT	4096
 
+int		nr_cpus;
 void *pthread_encode_ec_block(void *arg)
 {
-	THREAD_BLOCK_INFO *tinfo = (THREAD_BLOCK_INFO *)arg;
+	THREAD_BLOCK_INFO *t_block_info = (THREAD_BLOCK_INFO *)arg;
 	int	m, k, p, frag_len, index;
-	int	fd, tmpfd, i;
+	int	fd, i;
 	int64_t	offset;
 	EC_BUF_INFO	*ebi;
-	char	tmpname[NAME_MAX];
 	struct timeval	start;
 	
-	m = tinfo->m;
-	k = tinfo->k;
-	p = tinfo->p;
-	frag_len = tinfo->frag_len;
-	index = tinfo->index;
-	fd = tinfo->fd;
-	offset = tinfo->offset;
+	m = t_block_info->m;
+	k = t_block_info->k;
+	p = t_block_info->p;
+	frag_len = t_block_info->frag_len;
+	index = t_block_info->index;
+	fd = t_block_info->fd;
+	offset = t_block_info->offset;
 
 
+	DBG("ptid[%ld], m[%d], k[%d], p[%d], frag_len[%d], offset[%lld], index[%d]", pthread_self(), m, k, p, frag_len, offset, index);
 	ebi = alloc_ec_buf(m, k, p, frag_len);
 	for (i = 0; i < k; i++) {
-		if (preadn(fd, ebi->frag_ptrs[i], frag_len, offset) != frag_len) {
+		if (preadn(fd, ebi->frag_ptrs[i], frag_len, offset + i * frag_len) != frag_len) {
 			ERR_SYS("preadn() error)");
 		}
 	}
@@ -233,18 +235,12 @@ void *pthread_encode_ec_block(void *arg)
 	// Generate EC parity blocks from sources
 	ec_encode_data(frag_len, k, p, ebi->g_tbls, ebi->frag_ptrs, &(ebi->frag_ptrs)[k]);
 
-	tinfo->time = time_since(&start);
+	t_block_info->time = time_since(&start);
 	for (i = 0; i < ebi->m; i++) {
-		snprintf(tmpname, sizeof(tmpname), "%s.%d", tinfo->filename, i);
-		if ((tmpfd = open(tmpname, O_CREAT | O_RDWR, 0644)) < 0) {
-			ERR_SYS("open('%s') error", tmpname);
-		}
-		//dbg("write to file: '%s'", tmpname);
-		lseek64(tmpfd, frag_len * index, SEEK_SET);
-		if(writen(tmpfd, ebi->frag_ptrs[i], ebi->frag_len) != ebi->frag_len) {
+		DBG("ptid[%ld], wfd[%d]: %d, index[%d], pwriten(offset): %lld, write_len:[%ld]", pthread_self(), i, t_block_info->wfd[i], index, index*frag_len, ebi->frag_len);
+		if(pwriten(t_block_info->wfd[i], ebi->frag_ptrs[i], ebi->frag_len, index * frag_len) != ebi->frag_len) {
 			ERR_SYS("writen() error");
 		}
-		close(tmpfd);
 	}
 	release_ec_buf(ebi);
 	
@@ -254,7 +250,7 @@ void *pthread_encode_ec_block(void *arg)
 int main(int argc, char **argv)
 {
 	int             opt;
-	int		fd, tmpfd;
+	int		fd, tmpfd, wfd[M_K_P_MAX] = {0,};
 	struct stat	st;
 	int64_t		file_size, block_len, frag_len;
 	int		m, k, p;
@@ -262,7 +258,8 @@ int main(int argc, char **argv)
 	char		filename[NAME_MAX], tmpname[NAME_MAX];
 	EC_BUF_INFO	*ebi;
 	struct timeval	start;
-	pthread_t 	ptid[96] ={0,}; 
+	pthread_t 	*ptid;
+	THREAD_BLOCK_INFO	*t_block_info;
 
 	is_decode = 0;
 	k = K_DEFAULT;
@@ -293,12 +290,22 @@ int main(int argc, char **argv)
                 err_quit("USAGE: %s [-d] [-k k] [-p p] <origin_file | encode_file_prefix>", argv[0]);
         }
 
+	nr_cpus = get_nprocs();
+	ptid = malloc(nr_cpus * sizeof(pthread_t));
+	if (NULL == ptid) {
+		ERR_SYS("malloc(pthread_t) error");
+	}
+	memset(ptid, 0, nr_cpus * sizeof(pthread_t));
+	t_block_info = malloc(nr_cpus * sizeof(THREAD_BLOCK_INFO));
+	if (NULL == t_block_info) {
+		ERR_SYS("malloc(THREAD_BLOCK_INFO) error");
+	}
+	memset(t_block_info, 0, nr_cpus * sizeof(THREAD_BLOCK_INFO));
+
 	file_size = 0;
 	frag_len = 0;
 	strncpy(filename, argv[optind], sizeof(filename));
 	if (is_decode == 0) {
-		THREAD_BLOCK_INFO	tinfo[96];
-
 		if (lstat(filename, &st) < 0) {
 			ERR_SYS("lstat('%s') error", filename);
 		}
@@ -306,33 +313,44 @@ int main(int argc, char **argv)
 			ERR_SYS("open('%s') error", filename);
 		}
 		file_size = st.st_size;
-		block_len = file_size / 96;
+		block_len = file_size / nr_cpus;
 		frag_len = block_len / k;
-		msg("file['%s'], file_size[%ld], m[%d], k[%d], p[%d], block_len[%ld], frag_len[%ld]", filename, file_size, m, k, p, block_len, frag_len);
+		//msg("file['%s'], file_size[%ld], m[%d], k[%d], p[%d], block_len[%ld], frag_len[%ld], nr_cpus[%d]", filename, file_size, m, k, p, block_len, frag_len, nr_cpus);
 
+		for (i = 0; i < m; i++) {
+			snprintf(tmpname, sizeof(tmpname), "%s.%d", filename, i);
+			if ((wfd[i] = open(tmpname, O_CREAT | O_RDWR, 0644)) < 0) {
+				ERR_SYS("open('%s') error", tmpname);
+			}
+			DBG("file:[%s], wfd[%d]: %d", tmpname, i, wfd[i]);
+		}
 
-		for (i = 0; i < 96; i++) {
-			tinfo[i].m = m;
-			tinfo[i].k = k;
-			tinfo[i].p = p;
-			tinfo[i].frag_len = frag_len;
-			tinfo[i].fd = fd;
-			tinfo[i].offset = i*block_len;
-			tinfo[i].index = i;
-			tinfo[i].time = 0;
-			strncpy(tinfo[i].filename, filename, sizeof(tinfo[i].filename));
+		for (i = 0; i < nr_cpus; i++) {
+			t_block_info[i].m = m;
+			t_block_info[i].k = k;
+			t_block_info[i].p = p;
+			t_block_info[i].frag_len = frag_len;
+			t_block_info[i].block_len = block_len;
+			t_block_info[i].fd = fd;
+			memcpy(t_block_info[i].wfd, wfd, sizeof(wfd));
+			t_block_info[i].offset = i*block_len;
+			t_block_info[i].index = i;
+			t_block_info[i].time = 0;
 
-			pthread_create(&ptid[i], NULL, pthread_encode_ec_block, &tinfo[i]);
+			pthread_create(&ptid[i], NULL, pthread_encode_ec_block, &t_block_info[i]);
 		}	
 
-		for (i = 0; i < 96; i++) {
+		for (i = 0; i < nr_cpus; i++) {
 			pthread_join(ptid[i], NULL);
 		}	
 		close(fd);
+		for ( i = 0; i < m; i++) {
+			close(wfd[i]);
+		}
 		total_time = 0;
-		for (i = 0; i < 96; i++) {
-			if (tinfo[i].time > total_time) {
-				total_time = tinfo[i].time;
+		for (i = 0; i < nr_cpus; i++) {
+			if (t_block_info[i].time > total_time) {
+				total_time = t_block_info[i].time;
 			}
 		}
 		msg("COST TIME: %lld (us)", total_time);
@@ -352,16 +370,16 @@ int main(int argc, char **argv)
 		dbg("m[%d], k[%d], p[%d], frag_len[%d]", ebi->m, ebi->k, ebi->p, ebi->frag_len);
 		for (i = 0; i < m; i++) {
 			snprintf(tmpname, sizeof(tmpname), "%s.%d", filename, i);
-			if ((tmpfd = open(tmpname, O_RDONLY)) < 0) {
+			if ((wfd[i] = open(tmpname, O_RDONLY)) < 0) {
 				DBG("open('%s') error, skip it....", tmpname);
 				ebi->frag_err_list[ebi->nerrs++] = i;
 				continue;
 			}
 			//dbg("ebi->frag_ptrs[%d], len:[%d]", i, ebi->frag_len);
-			if(readn(tmpfd, ebi->frag_ptrs[i], ebi->frag_len) != ebi->frag_len) {
+			if(readn(wfd[i], ebi->frag_ptrs[i], ebi->frag_len) != ebi->frag_len) {
 				ERR_SYS("readn() error");
 			}
-			close(tmpfd);
+			close(wfd[i]);
 		}
 		if (ebi->nerrs > p) {
 			release_ec_buf(ebi);
