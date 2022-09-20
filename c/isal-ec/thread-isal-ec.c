@@ -220,7 +220,7 @@ void *pthread_encode_ec_block(void *arg)
 	offset = t_block_info->offset;
 
 
-	DBG("ptid[%ld], m[%d], k[%d], p[%d], frag_len[%d], offset[%lld], index[%d]", pthread_self(), m, k, p, frag_len, offset, index);
+	//DBG("ptid[%ld], m[%d], k[%d], p[%d], frag_len[%d], offset[%lld], index[%d]", pthread_self(), m, k, p, frag_len, offset, index);
 	ebi = alloc_ec_buf(m, k, p, frag_len);
 	for (i = 0; i < k; i++) {
 		if (preadn(fd, ebi->frag_ptrs[i], frag_len, offset + i * frag_len) != frag_len) {
@@ -237,7 +237,7 @@ void *pthread_encode_ec_block(void *arg)
 
 	t_block_info->time = time_since(&start);
 	for (i = 0; i < ebi->m; i++) {
-		DBG("ptid[%ld], wfd[%d]: %d, index[%d], pwriten(offset): %lld, write_len:[%ld]", pthread_self(), i, t_block_info->wfd[i], index, index*frag_len, ebi->frag_len);
+		//DBG("ptid[%ld], wfd[%d]: %d, index[%d], pwriten(offset): %lld, write_len:[%ld]", pthread_self(), i, t_block_info->wfd[i], index, index*frag_len, ebi->frag_len);
 		if(pwriten(t_block_info->wfd[i], ebi->frag_ptrs[i], ebi->frag_len, index * frag_len) != ebi->frag_len) {
 			ERR_SYS("writen() error");
 		}
